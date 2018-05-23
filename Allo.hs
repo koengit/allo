@@ -1,8 +1,9 @@
-module Allo where
+module Main where
 
 import qualified Data.Set as S
 import qualified Data.Map as M
-import Data.List ( inits )
+import Data.List ( tails, inits, insert, (\\) )
+import Data.Char ( isAlphaNum, ord )
 import System.Process( system )
 
 --------------------------------------------------------------------------------
@@ -10,7 +11,7 @@ import System.Process( system )
 
 main :: IO ()
 main =
-  do ftab <- cplex (corpusToProblem corpus2)
+  do ftab <- cplex (corpusToProblem (take 100 corpus2))
      putStr $ unlines $ map show $ M.toList ftab
 
 --------------------------------------------------------------------------------
@@ -41,11 +42,35 @@ corpus2 =
   , ("gekauft",  ["buy","pastperfect"])
   ]
 
+corpus3 :: Corpus
+corpus3 =
+  [ ("word",   ["become","p1sg"])
+  , ("wordt",  ["become","p2sg"])
+  , ("wordt",  ["become","p3sg"])
+  , ("worden", ["become","p2pl"])
+  , ("geworden",["become","pastp"])
+  , ("hoor",   ["hear","p1sg"])
+  , ("hoort",  ["hear","p2sg"])
+  , ("hoort",  ["hear","p3sg"])
+  , ("horen",  ["hear","p1pl"])
+  , ("gehoord",["hear","pastp"])
+  , ("werk",   ["work","p1sg"])
+  , ("werkt",  ["work","p2sg"])
+  , ("werkt",  ["work","p3sg"])
+  , ("werken", ["work","p1pl"])
+  , ("gewerkt",["work","pastp"])
+  , ("ga",    ["go","p1sg"])
+  , ("gaat",  ["go","p2sg"])
+  , ("gaat",  ["go","p3sg"])
+  , ("gaan",  ["go","p1pl"])
+  , ("gegaan",["go","pastp"])
+  ]
+
 --------------------------------------------------------------------------------
 -- problem (to be solved by an LP solver)
 
 type Name   = String
-type Term   = (Integer,String)
+type Term   = (Integer,Name)
 data Constr = [Term] :=: Integer | [Term] :>=: Integer deriving ( Show )
 
 lhs :: Constr -> [Term]
@@ -61,10 +86,15 @@ data Problem
 --------------------------------------------------------------------------------
 -- corpus -> problem
 
+cost :: String -> Int
+cost s = 1
+--cost s = length s
+--cost s = 1000-length s
+
 corpusToProblem :: Corpus -> Problem
 corpusToProblem corp =
   Problem
-  { minimise = [ (1,f `allo` s)
+  { minimise = [ (fromIntegral (cost s),f `allo` s)
                | (f,ss) <- M.toList featMap
                , s <- S.toList ss
                ]
@@ -117,12 +147,17 @@ subs :: [a] -> [[a]]
 subs []     = [[]]
 subs (x:xs) = [ x:ys | ys <- inits xs ] ++ subs xs
 
+subsets :: [a] -> [[a]]
+subsets []     = [[]]
+subsets (x:xs) = [ x:ys | ys <- zs ] ++ zs where zs = subsets xs
+
 --------------------------------------------------------------------------------
 -- solving a problem with cplex, and parsing the solution
 
 cplex :: Problem -> IO (M.Map Feature [String])
 cplex p =
-  do writeFile "input.lp" $ unlines $
+  do putStrLn "+++ Generating input file..."
+     writeFile "input.lp" $ unlines $
        [ "MINIMIZE"
        , "  " ++ showTerms (minimise p)
        , "SUBJECT TO"
@@ -143,7 +178,9 @@ cplex p =
        , "display solution variables *"
        , "quit"
        ]
+     putStrLn "+++ Starting CPLEX..."
      system "cplex < script.in > solution.out"
+     putStrLn "+++ Reading solution..."
      s <- readFile "solution.out"
      return $ M.fromListWith (++)
        [ (takeWhile (/= '_') v', [drop 1 (dropWhile (/= '_') v')])
@@ -174,6 +211,11 @@ showTerms axs = noPlus (unwords [ show' a x | (a,x) <- axs, a /= 0 ])
 showConstr :: Constr -> String
 showConstr (axs :>=: c) = showTerms axs ++ " >= " ++ show c
 showConstr (axs :=:  c) = showTerms axs ++ " = "  ++ show c
+
+--------------------------------------------------------------------------------
+
+usort :: Ord a => [a] -> [a]
+usort = S.toList . S.fromList
 
 --------------------------------------------------------------------------------
 
