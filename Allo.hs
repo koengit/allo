@@ -2,17 +2,23 @@ module Main where
 
 import qualified Data.Set as S
 import qualified Data.Map as M
-import Data.List ( tails, inits, insert, (\\) )
+import Data.List ( tails, inits, insert, (\\), isInfixOf, nub, maximumBy , sortBy)
 import Data.Char ( isAlphaNum, ord )
 import System.Process( system )
-
+import Data.List.Split
+import Data.Ord
+import System.IO 
+import System.Environment
+import Debug.Trace
 --------------------------------------------------------------------------------
 -- main
 
 main :: IO ()
-main =
-  do ftab <- cplex (corpusToProblem (take 100 corpus2))
-     putStr $ unlines $ map show $ M.toList ftab
+main = do
+       file <- getArgs
+       corpus <- readCorpus $ head file
+       ftab <- cplex (corpusToProblem (take (read (file!!1)::Int) corpus))
+       putStr $ unlines $ map show $ M.toList ftab
 
 --------------------------------------------------------------------------------
 -- corpus (table of word + feature list)
@@ -20,12 +26,54 @@ main =
 type Feature = String
 type Corpus  = [(String,[Feature])]
 
+readCorpus :: FilePath -> IO Corpus
+readCorpus file = do
+  l <- readFile file 
+  let ws        = (map (splitOn "\t")  (lines l)) 
+      getFeats  =      
+            \w -> 
+              let fs = (splitOn ";" (w !! 2)) in
+                (head fs, 
+                 map (\feat -> 
+                        if elem feat ["SG" ,"PL","DEF","INDF"] 
+                        -- distinguish between Verb Numerus and Noun Numerus etc
+                      
+                         then  
+                          head fs ++ "." ++ feat else feat)  (tail fs))
+                         
+
+  return $ concat [ nub [     
+                          (w !! 1, w !! 0 : ( snd  (getFeats w))),
+                          (w !! 0, w!!0 : (standardForm (fst (getFeats w))))  
+                          -- add entry for the standard form (if not already given)  
+                        ] 
+                  | w <- ws
+                  ]
+
+
+standardForm "V" = ["NFIN"]
+standardForm "N" = ["NOM","N.SG"]
+standardForm "V.PTCP" = ["NFIN"]
+standardForm "ADJ" = ["INDF","ADJ.SG"]
+standardForm "V.CVB" = ["ACT"]
+standardForm x = error $ show x
+       
 corpus1 :: Corpus
 corpus1 =
   [ ("bil",   ["car","sg"])
   , ("bilar", ["car","pl"])
   , ("duk",   ["cloth","sg"])
   , ("dukar", ["cloth","pl"])
+  , ("böcker",   ["book","pl"])
+  , ("bok",     ["book","sg"])
+  , ("son", ["son", "sg"])
+  , ("söner", ["son","pl"])
+  , ("katt", ["cat", "sg"])
+  , ("katter", ["cat", "pl"])
+  , ("glas", ["glass","sg"])
+  , ("glas", ["glass","pl"])
+  , ("ämne", ["topic", "sg"])
+  , ("ämnen", ["topic", "pl"])
   ]
 
 corpus2 :: Corpus
@@ -86,25 +134,36 @@ data Problem
 --------------------------------------------------------------------------------
 -- corpus -> problem
 
-cost :: String -> Int
-cost s = 1
---cost s = length s
+cost :: String -> String -> Int
+cost s f = 1
+-- cost s f = if (nonStemfeat f) then 100 
+  --            else if f `isInfixOf` s then 101 
+    --                 else  100 - (length [(a,b) | (a,b) <- zip s f, a == b])
 --cost s = 1000-length s
+
+nonStemfeat f = elem f ["N.INDF","ACT","PASS","N.DEF","MASC+FEM","V.CVB","NEUT",
+                        "ACC","DAT","V.PL","IND","GEN","SBJV","3","V.SG","V",
+                        "NFIN","PST","PRS","V.PTCP","N.PL","N.SG",
+                        "ADJ.DEF", "ADJ.INDF", "SPRL", "COMPV"]
 
 corpusToProblem :: Corpus -> Problem
 corpusToProblem corp =
   Problem
-  { minimise = [ (fromIntegral (cost s),f `allo` s)
+  { minimise = [ (fromIntegral (cost s f),f `allo` s)
                | (f,ss) <- M.toList featMap
-               , s <- S.toList ss
-               ]
+               , s <- S.toList ss -- , nonStemfeat f
+               ] --  "s is an allomorph of feature f"
+ 
   , constrs  = [ c
                | ((w,fs),i) <- corp `zip` [1..]
                , c <- constrsFor i w fs
                ]
   }
  where
-  featMap = M.fromListWith S.union
+ 
+  -- map of all features of each word mapped with the substrings of the word
+  
+  featMap = M.fromListWith S.union 
             [ (f,S.singleton s)
             | (w,fs) <- corp
             , s <- subs w
@@ -112,44 +171,63 @@ corpusToProblem corp =
             ]
 
   constrsFor i w fs =
+   
     -- exactly one part for each letter l
-    [ [ (1,p) | (p,ls) <- parts `zip` subs w', l `elem` ls ] :=: 1
-    | l <- w'
+    [ [ (1,p) | (p,ls) <- parts `zip` (concat (map subs_ w')), l `elem` ls ] :=: 1
+    | l <- [1..last (concat w')]
     ] ++
+    
     -- if a part exists, at least one feature must explain it
     [ ((-1,p) : [ (1,f `allo` s) | f <- fs ]) :>=: 0
-    | (p,s) <- parts `zip` subs w
+    | (p,s) <- (parts `zip` subs w)
     ] ++
+    
     -- every feature must explain some part of the word (can be the empty string as well)
     concat
-    [ [ [ (1,p ++ "_" ++ f) | p <- parts ] :>=: 1 ] ++
-      [ [ (-1,p ++ "_" ++ f), (1,f `allo` s) ] :>=: 0
+    [ [ [ (1,p ++ "_" ++ f) | p <- parts ] :>=: 1 ] ++ -- alla features måste ge någon partition
+    
+      [ [ (-1,p ++ "_" ++ f), (1,f `allo` s) ] :>=: 0 
+      
       | (p,s) <- parts `zip` subs w
+      
       ] ++
-      [ [ (-1,p ++ "_" ++ f), (1,p) ] :>=: 0
+      [ [ (-1,p ++ "_" ++ f), (1,p) ] :>=: 0 
       | (p,s) <- parts `zip` subs w
       ]
     | f <- fs
     ]
    where
-    -- the word, but every letter is now unique
-    w' = map snd (w `zip` [1..])
-    
-    -- a unique name for every possible partition of the word
-    parts = [ "w" ++ show i ++ "_" ++ w ++ "_" ++ show j ++ "_" ++ s
+    -- the word, but every letter is now unique    
+    w' = case (length (head (splitOn "-" w))) of
+          n -> filter (not.null) [map snd (w `zip` [1..n]), map snd ((drop n w) `zip` [(n+1)..])]
+       
+    -- a unique name for every possible partition of the word    
+    parts = [ "w" ++ show i ++ "_" ++ 
+              (map (\x -> if x == '-' || x == ' ' then '1' else x) w) ++ "_" ++ show j ++ "_" ++ s
             | (s,j) <- subs w `zip` [1..]
             ]
+{-
+    parts = [ "w" ++ show i ++ "_" ++ (map (\x -> if x == '-' || x == ' ' then '1' else x) w) ++ "_" ++ show j ++ "_" ++ s
+            | (s,j) <- subs w `zip` [1..]
+            ]
+-}
 
 allo :: Feature -> String -> Name
-f `allo` s = "allo_" ++ f ++ "_" ++ s
+f `allo` s = map (\x -> if x == '-' || x == ' ' then '1' else x) $ "allo_" ++ f ++ "_" ++ s
 
-subs :: [a] -> [[a]]
-subs []     = [[]]
-subs (x:xs) = [ x:ys | ys <- inits xs ] ++ subs xs
 
-subsets :: [a] -> [[a]]
-subsets []     = [[]]
-subsets (x:xs) = [ x:ys | ys <- zs ] ++ zs where zs = subsets xs
+-- We do not consider substrings across "-"'s.
+subs :: String -> [String]
+subs xs = case splitOn "-" xs of
+  [as,bs] -> xs : (init (subs as)) ++ subs bs 
+  _       -> case splitOn " " xs of
+               [as,bs] -> xs : (init (subs as)) ++ subs bs
+               _       -> subs_ xs
+  
+
+subs_ :: [a] -> [[a]]
+subs_ []     = [[]]
+subs_ (x:xs) = [ x:ys | ys <- inits xs ] ++ subs_ xs
 
 --------------------------------------------------------------------------------
 -- solving a problem with cplex, and parsing the solution
@@ -183,7 +261,7 @@ cplex p =
      putStrLn "+++ Reading solution..."
      s <- readFile "solution.out"
      return $ M.fromListWith (++)
-       [ (takeWhile (/= '_') v', [drop 1 (dropWhile (/= '_') v')])
+       [  (map (\x -> if x == '1' then '-' else x) (takeWhile (/= '_') v'), [drop 1 (dropWhile (/= '_') v')])
        | l <- lines s
        , take 5 l == "allo_"
        , [v,one] <- [words l]
