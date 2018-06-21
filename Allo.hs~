@@ -2,7 +2,7 @@ module Main where
 
 import qualified Data.Set as S
 import qualified Data.Map as M
-import Data.List ( tails, inits, insert, (\\), isInfixOf, maximumBy , sortBy)
+import Data.List ( tails, inits, insert, (\\), isInfixOf, nub, maximumBy , sortBy)
 import Data.Char ( isAlphaNum, ord )
 import System.Process( system )
 import Data.List.Split
@@ -296,17 +296,10 @@ showConstr (axs :=:  c) = showTerms axs ++ " = "  ++ show c
 usort :: Ord a => [a] -> [a]
 usort = S.toList . S.fromList
 
-nub :: Ord a => [a] -> [a]
-nub xs = go S.empty xs
- where
-  go seen (x:xs)
-    | x `S.member` seen = go seen xs
-    | otherwise         = x : go (S.insert x seen) xs
-
 --------------------------------------------------------------------------------
 
 matches :: String -> String -> [[Int]]
-matches pat word = nub (go [(pat,[])] 0 word)
+matches pat word = go [(pat,[])] 0 word
  where
   go pats i [] =
     [ reverse is
@@ -316,36 +309,18 @@ matches pat word = nub (go [(pat,[])] 0 word)
 
   go pats i (c:cs) =
     go
-    [ (pat', [ i | b ]++is)
+    [ (bs, [ i | a /= '+', a /= '*' ]++is)
     | (pat,is) <- pats
-    , (pat',b) <- eat c pat
+    , bs <- eat c pat
     ]
     (i+1) cs
 
-  eat c ""        = []
-  eat c ('+':pat) = [('*':pat,False)]
-  eat c ('*':pat) = [('*':pat,False)] ++ eat c pat
-  eat c (a  :pat) = [(pat,True) | a == c]
+  eat c []        = []
+  eat c ('+':pat) = ['*':pat]
+  eat c ('*':pat) = ['*':pat] ++ eat c pat
+  eat c (a  :pat) = [pat | a == c]
 
-  eps ""       = True
+  eps []       = True
   eps ('*':as) = eps as
   eps _        = False
-
-apply :: String -> String -> [String]
-apply pat word = nub [ simp (remove is word) | is <- matches pat word ]
- where
-  simp ('+':'+':s) = simp ('+':s)
-  simp (c:s)       = c : simp s
-  simp ""          = ""
-  
-  remove is s = [ if i `elem` is then '+' else c | (c,i) <- s `zip` [0..] ]
-
-applyTable :: [[String]] -> String -> [String]
-applyTable [] word = [word]
-applyTable (pats:patss) word =
-  [ word2
-  | pat <- pats
-  , word1 <- apply pat word
-  , word2 <- applyTable patss word1
-  ]
 
