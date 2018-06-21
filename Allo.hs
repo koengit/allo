@@ -302,6 +302,7 @@ nub xs = go S.empty xs
   go seen (x:xs)
     | x `S.member` seen = go seen xs
     | otherwise         = x : go (S.insert x seen) xs
+  go seen []            = []
 
 --------------------------------------------------------------------------------
 
