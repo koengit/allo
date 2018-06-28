@@ -1,0 +1,44 @@
+#!/bin/sh
+
+# To use this file successfully, do the following:
+#
+# 1. Make sure you have a .ssh directoy in your home:
+# > mkdir -p ~/.ssh
+#
+# 2. Make sure it is only readable/writable by you:
+# > chmod a-rwx,u=rwx ~/.ssh
+#
+# 3. Make sure you have a ssh config file:
+# > touch ~/.ssh/config
+#
+# 4. Add the following lines to your ~/.ssh/config:
+# 
+# Host cth
+# HostName remote11.chalmers.se
+# ControlMaster auto
+# ControlPath /home/annl/.ssh/cth-%h-%p-%r
+#
+# (remove the #'s before you add the lines)
+#
+# 5. Open a new terminal, and log in on the cth machine:
+# > ssh cth
+# (leave this open while you are cplexing)
+
+HOST="cth"
+
+# copy over input file
+scp "$1" "${HOST}:input.lp"
+
+# make script file
+echo '
+r input.lp
+opt
+display solution variables sol_*
+quit' > script.in
+
+# copy over script file
+scp "script.in" "${HOST}:"
+
+# run cplex remotely
+ssh "${HOST}" "cplex < script.in"
+
